@@ -103,10 +103,11 @@ CANONICAL_HOST = "growthwick.marcusspillane.com"
 
 @app.middleware("http")
 async def canonical_redirect(request: Request, call_next):
-    """Redirect railway.app domain to canonical custom domain."""
+    """Redirect railway.app domain to canonical custom domain (except health/internal)."""
     host = request.headers.get("host", "")
-    if CANONICAL_HOST and "railway.app" in host:
-        path = request.url.path
+    path = request.url.path
+    # Never redirect health checks or internal Railway probes
+    if CANONICAL_HOST and "railway.app" in host and path not in ("/health", "/healthz", "/ping"):
         query = f"?{request.url.query}" if request.url.query else ""
         return RedirectResponse(url=f"https://{CANONICAL_HOST}{path}{query}", status_code=301)
     return await call_next(request)
