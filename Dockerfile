@@ -15,4 +15,4 @@ RUN SKIP_EMBEDDINGS=1 CORPUS_PATH=/app/corpus python index.py
 EXPOSE 8000
 
 # PORT is injected by Railway at runtime
-CMD ["uvicorn", "api:app", "--host", "0.0.0.0", "--port", "8000"]
+CMD uvicorn api:app --host 0.0.0.0 --port ${PORT:-8000}
