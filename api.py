@@ -10,10 +10,11 @@ import numpy as np
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request, Response, Depends
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
+from auth import authenticate, get_current_user, require_auth, logout
 
 from models import QueryRequest, QueryResponse, ChunkSource, HealthResponse, PersonaInfo
 from retrieve import get_retriever
@@ -67,9 +68,42 @@ async def startup_event():
     print(f"Growthwick API started. Corpus: {stats['total_chunks']} chunks, {stats['personas']} personas")
 
 
+@app.get("/login")
+async def login_page():
+    """Serve login page."""
+    login_path = frontend_path / "login.html"
+    return FileResponse(str(login_path))
+
+
+@app.post("/auth/login")
+async def auth_login(request: Request, response: Response):
+    """Handle login form submission."""
+    form = await request.form()
+    username = str(form.get("username", ""))
+    password = str(form.get("password", ""))
+    token = authenticate(username, password)
+    if not token:
+        raise HTTPException(status_code=401, detail="Invalid credentials")
+    response = RedirectResponse(url="/", status_code=302)
+    response.set_cookie("session", token, httponly=True, samesite="lax", max_age=259200)  # 3 days
+    return response
+
+
+@app.get("/auth/logout")
+async def auth_logout(request: Request, response: Response):
+    """Clear session and redirect to login."""
+    logout(request, response)
+    resp = RedirectResponse(url="/login", status_code=302)
+    resp.delete_cookie("session")
+    return resp
+
+
 @app.get("/")
-async def root():
-    """Serve the frontend."""
+async def root(request: Request):
+    """Serve the frontend — requires auth."""
+    user = get_current_user(request)
+    if not user:
+        return RedirectResponse(url="/login", status_code=302)
     index_path = frontend_path / "index.html"
     if index_path.exists():
         return FileResponse(str(index_path))
@@ -97,7 +131,10 @@ async def personas():
 
 
 @app.post("/query", response_model=QueryResponse)
-async def query(request: QueryRequest):
+async def query(request: QueryRequest, http_request: Request):
+    """Main query endpoint — requires auth."""
+    if not get_current_user(http_request):
+        raise HTTPException(status_code=401, detail="Not authenticated")
     """Main query endpoint. Runs hybrid retrieval + LLM generation."""
     if not request.query.strip():
         raise HTTPException(status_code=400, detail="Query cannot be empty")

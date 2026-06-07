@@ -14,7 +14,10 @@
     <button class="mode-btn stress" id="stressBtn" onclick="setMode('stress-test')">⚔️ Stress-Test</button>
     <button class="mode-btn strategy active" id="strategyBtn" onclick="setMode('strategy-build')">🧭 Strategy Build</button>
   </div>
-  <div class="header-tagline">Grounded in 16 expert personas · Citations required</div>
+  <div class="header-right">
+    <div class="header-tagline">Grounded in 16 expert personas · Citations required</div>
+    <a href="/auth/logout" class="logout-btn">Sign out</a>
+  </div>
 </header>
 
 <main class="main">
@@ -218,6 +221,11 @@ async function sendQuery() {
     });
 
     removeLoadingIndicator();
+
+    if (resp.status === 401) {
+      window.location.href = '/login';
+      return;
+    }
 
     if (!resp.ok) {
       const err = await resp.json().catch(() => ({ detail: 'Unknown error' }));
