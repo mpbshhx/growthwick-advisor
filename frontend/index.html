@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Growthwick Marketing Advisor</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+
+<header class="header">
+  <div class="header-logo">Growth<span>wick</span> Advisor</div>
+  <div class="mode-toggle">
+    <button class="mode-btn stress" id="stressBtn" onclick="setMode('stress-test')">⚔️ Stress-Test</button>
+    <button class="mode-btn strategy active" id="strategyBtn" onclick="setMode('strategy-build')">🧭 Strategy Build</button>
+  </div>
+  <div class="header-tagline">Grounded in 16 expert personas · Citations required</div>
+</header>
+
+<main class="main">
+
+  <!-- Chat Panel -->
+  <div class="chat-panel">
+    <div class="persona-filter">
+      <label>Filter to expert:</label>
+      <select id="personaSelect">
+        <option value="">All experts</option>
+      </select>
+    </div>
+
+    <div class="messages" id="messages">
+      <div class="welcome">
+        <h2>Your marketing advisor is ready.</h2>
+        <p>Ask any marketing or growth strategy question. I'll pull from 16 expert personas and cite my sources.</p>
+        <div class="examples">
+          <div class="example-q" onclick="useExample(this)">My client has an SEO-heavy strategy. Is that still valid in 2026?</div>
+          <div class="example-q" onclick="useExample(this)">We're building a B2B SaaS and debating freemium vs. free trial. Help me decide.</div>
+          <div class="example-q" onclick="useExample(this)">Here's our positioning statement: [paste yours]. Stress-test it.</div>
+          <div class="example-q" onclick="useExample(this)">We're launching a new product to developers. What's the go-to-market playbook?</div>
+        </div>
+      </div>
+    </div>
+
+    <div class="input-area">
+      <textarea id="queryInput" placeholder="Ask a marketing question or paste a plan to stress-test..." rows="1"
+        onkeydown="handleKeydown(event)" oninput="autoResize(this)"></textarea>
+      <button class="send-btn" id="sendBtn" onclick="sendQuery()">Send →</button>
+    </div>
+  </div>
+
+  <!-- Sources Panel -->
+  <div class="sources-panel">
+    <div class="sources-header">📚 Retrieved Sources</div>
+    <div class="sources-content" id="sourcesContent">
+      <div class="sources-empty">
+        Sources from the expert corpus will appear here alongside each response.<br><br>
+        Every claim is grounded in a real document you can verify.
+      </div>
+    </div>
+  </div>
+
+</main>
+
+<script>
+const API_BASE = window.location.origin;
+let currentMode = 'strategy-build';
+let isLoading = false;
+
+// Load personas on startup
+async function loadPersonas() {
+  try {
+    const resp = await fetch(`${API_BASE}/personas`);
+    if (!resp.ok) return;
+    const personas = await resp.json();
+    const select = document.getElementById('personaSelect');
+    personas.forEach(p => {
+      const opt = document.createElement('option');
+      opt.value = p.persona;
+      opt.textContent = `${p.persona} (${p.chunk_count} chunks)`;
+      select.appendChild(opt);
+    });
+  } catch (e) {
+    console.error('Failed to load personas:', e);
+  }
+}
+
+function setMode(mode) {
+  currentMode = mode;
+  document.getElementById('stressBtn').classList.toggle('active', mode === 'stress-test');
+  document.getElementById('strategyBtn').classList.toggle('active', mode === 'strategy-build');
+}
+
+function handleKeydown(e) {
+  if (e.key === 'Enter' && !e.shiftKey) {
+    e.preventDefault();
+    sendQuery();
+  }
+}
+
+function autoResize(el) {
+  el.style.height = 'auto';
+  el.style.height = Math.min(el.scrollHeight, 120) + 'px';
+}
+
+function useExample(el) {
+  const input = document.getElementById('queryInput');
+  input.value = el.textContent;
+  autoResize(input);
+  input.focus();
+}
+
+function addMessage(role, content, mode) {
+  const messagesEl = document.getElementById('messages');
+
+  // Remove welcome message on first user message
+  const welcome = messagesEl.querySelector('.welcome');
+  if (welcome) welcome.remove();
+
+  const msgDiv = document.createElement('div');
+  msgDiv.className = `message ${role}`;
+
+  if (role === 'assistant' && mode) {
+    const badge = document.createElement('div');
+    badge.className = `message-mode-badge ${mode === 'stress-test' ? 'badge-stress' : 'badge-strategy'}`;
+    badge.textContent = mode === 'stress-test' ? '⚔️ STRESS-TEST' : '🧭 STRATEGY BUILD';
+    msgDiv.appendChild(badge);
+  }
+
+  const bubble = document.createElement('div');
+  bubble.className = 'message-bubble';
+  bubble.textContent = content;
+  msgDiv.appendChild(bubble);
+
+  messagesEl.appendChild(msgDiv);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+  return msgDiv;
+}
+
+function addLoadingIndicator() {
+  const messagesEl = document.getElementById('messages');
+  const msgDiv = document.createElement('div');
+  msgDiv.className = 'message assistant';
+  msgDiv.id = 'loadingMsg';
+  msgDiv.innerHTML = `
+    <div class="loading-indicator">
+      <div class="dot"></div>
+      <div class="dot"></div>
+      <div class="dot"></div>
+    </div>
+  `;
+  messagesEl.appendChild(msgDiv);
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
+
+function removeLoadingIndicator() {
+  const el = document.getElementById('loadingMsg');
+  if (el) el.remove();
+}
+
+function renderSources(sources) {
+  const container = document.getElementById('sourcesContent');
+  if (!sources || sources.length === 0) {
+    container.innerHTML = '<div class="sources-empty">No sources retrieved for this query.</div>';
+    return;
+  }
+
+  container.innerHTML = '';
+  sources.forEach((src, i) => {
+    const card = document.createElement('div');
+    card.className = 'source-card';
+
+    const hasUrl = src.source_url && !src.source_url.startsWith('file://');
+    const urlHtml = hasUrl
+      ? `<div class="source-url"><a href="${src.source_url}" target="_blank" rel="noopener">${src.source_url}</a></div>`
+      : '';
+
+    card.innerHTML = `
+      <div class="source-card-header">
+        <span class="persona-badge">${src.persona}</span>
+        <span class="source-file">${src.file_name}</span>
+      </div>
+      ${urlHtml}
+      ${src.text ? `<div class="source-excerpt">${src.text}</div>` : ''}
+    `;
+    container.appendChild(card);
+  });
+}
+
+async function sendQuery() {
+  if (isLoading) return;
+
+  const input = document.getElementById('queryInput');
+  const query = input.value.trim();
+  if (!query) return;
+
+  const personaFilter = document.getElementById('personaSelect').value || null;
+
+  isLoading = true;
+  document.getElementById('sendBtn').disabled = true;
+  input.value = '';
+  input.style.height = 'auto';
+
+  // Add user message
+  addMessage('user', query);
+
+  // Show loading
+  addLoadingIndicator();
+
+  try {
+    const resp = await fetch(`${API_BASE}/query`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        mode: currentMode,
+        persona_filter: personaFilter
+      })
+    });
+
+    removeLoadingIndicator();
+
+    if (!resp.ok) {
+      const err = await resp.json().catch(() => ({ detail: 'Unknown error' }));
+      addMessage('assistant', `Error: ${err.detail || resp.statusText}`);
+      renderSources([]);
+      return;
+    }
+
+    const data = await resp.json();
+    addMessage('assistant', data.response, data.mode);
+    renderSources(data.sources);
+
+  } catch (e) {
+    removeLoadingIndicator();
+    addMessage('assistant', `Connection error: ${e.message}. Make sure the API server is running.`);
+    renderSources([]);
+  } finally {
+    isLoading = false;
+    document.getElementById('sendBtn').disabled = false;
+    input.focus();
+  }
+}
+
+// Init
+loadPersonas();
+</script>
+</body>
+</html>

@@ -1,0 +1,10 @@
+﻿__pycache__/
+*.pyc
+*.pyo
+growthwick.db
+*.log
+*.log.err
+server.pid
+.env.runtime
+test_*.py
+start_server.ps1
