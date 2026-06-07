@@ -98,21 +98,6 @@ async def auth_logout(request: Request, response: Response):
     return resp
 
 
-CANONICAL_HOST = "growthwick.marcusspillane.com"
-
-
-@app.middleware("http")
-async def canonical_redirect(request: Request, call_next):
-    """Redirect railway.app domain to canonical custom domain (except health/internal)."""
-    host = request.headers.get("host", "")
-    path = request.url.path
-    # Never redirect health checks or internal Railway probes
-    if CANONICAL_HOST and "railway.app" in host and path not in ("/health", "/healthz", "/ping"):
-        query = f"?{request.url.query}" if request.url.query else ""
-        return RedirectResponse(url=f"https://{CANONICAL_HOST}{path}{query}", status_code=301)
-    return await call_next(request)
-
-
 @app.get("/")
 async def root(request: Request):
     """Serve the frontend — requires auth."""
