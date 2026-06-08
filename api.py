@@ -6,11 +6,12 @@ Run locally: uvicorn api:app --reload --port 8000
 """
 
 import os
+import io
 import numpy as np
 from pathlib import Path
 from typing import List, Optional
 
-from fastapi import FastAPI, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, HTTPException, Request, Response, Depends, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, RedirectResponse, HTMLResponse
@@ -121,6 +122,117 @@ async def health():
         personas=stats["personas"],
         corpus_path=CORPUS_PATH
     )
+
+
+def extract_text_from_file(filename: str, content: bytes) -> str:
+    """Extract plain text from uploaded file. Supports PDF, DOCX, TXT, MD, images."""
+    ext = Path(filename).suffix.lower()
+
+    if ext == ".pdf":
+        try:
+            from pypdf import PdfReader
+            reader = PdfReader(io.BytesIO(content))
+            pages = [p.extract_text() or "" for p in reader.pages]
+            text = "\n\n".join(pages).strip()
+            return text[:50000]  # cap at 50k chars
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"PDF extraction failed: {e}")
+
+    elif ext in (".docx",):
+        try:
+            from docx import Document
+            doc = Document(io.BytesIO(content))
+            text = "\n".join(p.text for p in doc.paragraphs if p.text.strip())
+            return text[:50000]
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"DOCX extraction failed: {e}")
+
+    elif ext in (".txt", ".md", ".csv", ".json"):
+        try:
+            return content.decode("utf-8", errors="replace")[:50000]
+        except Exception as e:
+            raise HTTPException(status_code=422, detail=f"Text extraction failed: {e}")
+
+    elif ext in (".png", ".jpg", ".jpeg", ".webp", ".gif"):
+        # Use GPT-4o vision to describe the image
+        return None  # handled separately in the endpoint
+
+    else:
+        raise HTTPException(status_code=422, detail=f"Unsupported file type: {ext}. Supported: PDF, DOCX, TXT, MD, PNG, JPG.")
+
+
+@app.post("/upload")
+async def upload_file(request: Request, file: UploadFile = File(...), query: str = Form(default=""), mode: str = Form(default="strategy-build")):
+    """Upload a file + optional question. Returns LLM analysis grounded in the file content."""
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+
+    if not USE_AZURE_OPENAI:
+        raise HTTPException(status_code=500, detail="No LLM configured.")
+
+    content = await file.read()
+    if len(content) > 20 * 1024 * 1024:  # 20MB limit
+        raise HTTPException(status_code=413, detail="File too large. Max 20MB.")
+
+    ext = Path(file.filename).suffix.lower()
+    is_image = ext in (".png", ".jpg", ".jpeg", ".webp", ".gif")
+
+    user_question = query.strip() or "Please review this document and provide strategic marketing feedback."
+
+    from openai import AzureOpenAI
+    az_client = AzureOpenAI(
+        api_key=AZURE_OPENAI_KEY,
+        azure_endpoint="https://hhx-ai-agents-general.openai.azure.com",
+        api_version="2024-12-01-preview"
+    )
+
+    system_prompt = get_system_prompt()
+
+    if is_image:
+        import base64
+        b64 = base64.b64encode(content).decode()
+        mime = {"png": "image/png", "jpg": "image/jpeg", "jpeg": "image/jpeg", "webp": "image/webp", "gif": "image/gif"}.get(ext.lstrip("."), "image/png")
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": [
+                {"type": "text", "text": f"The user has uploaded an image named '{file.filename}'. {user_question}"},
+                {"type": "image_url", "image_url": {"url": f"data:{mime};base64,{b64}"}}
+            ]}
+        ]
+    else:
+        file_text = extract_text_from_file(file.filename, content)
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": f"""The user has uploaded a file named '{file.filename}'. Here is its content:
+
+---BEGIN FILE CONTENT---
+{file_text}
+---END FILE CONTENT---
+
+User's question: {user_question}
+
+Please review this document through your marketing advisor lens. Provide specific, actionable feedback grounded in the expert frameworks you embody. Cite relevant frameworks where applicable."""}
+        ]
+
+    try:
+        completion = az_client.chat.completions.create(
+            model=LLM_MODEL,
+            messages=messages,
+            temperature=0.3,
+            max_tokens=2000
+        )
+        response_text = completion.choices[0].message.content
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"LLM analysis failed: {str(e)}")
+
+    return {
+        "response": response_text,
+        "filename": file.filename,
+        "file_size": len(content),
+        "mode": mode,
+        "query": user_question
+    }
 
 
 @app.get("/personas", response_model=List[PersonaInfo])

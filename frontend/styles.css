@@ -281,6 +281,60 @@ body {
 .send-btn:hover { background: #2d2d4e; }
 .send-btn:disabled { background: #ccc; cursor: not-allowed; }
 
+.attach-btn {
+  flex-shrink: 0;
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  cursor: pointer;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  transition: all 0.2s;
+  align-self: flex-end;
+  margin-bottom: 2px;
+}
+
+.attach-btn:hover { background: var(--bg); color: var(--text); border-color: #aaa; }
+.attach-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.file-chip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: #e8f4fd;
+  border: 1px solid #b3d9f7;
+  border-radius: 20px;
+  padding: 4px 10px 4px 12px;
+  font-size: 12px;
+  color: #1a6fa8;
+  max-width: 200px;
+  align-self: flex-end;
+  margin-bottom: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.file-chip span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.file-chip-remove {
+  background: none;
+  border: none;
+  cursor: pointer;
+  color: #1a6fa8;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0;
+  flex-shrink: 0;
+}
+
+.file-chip-remove:hover { color: #c0392b; }
+
 /* Sources Panel */
 .sources-panel {
   width: 40%;
