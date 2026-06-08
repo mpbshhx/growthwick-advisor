@@ -97,7 +97,7 @@ function clearFile() {
 }
 
 function detectUrlInInput(text) {
-  return /https?:\/\/[^\s]+/.test(text);
+  return /https?:\/\/[^\s]+/.test(text) || /(?<![/\w])www\.[a-zA-Z0-9][\w\-.]+\.[a-zA-Z]{2,}/.test(text);
 }
 
 function checkUrlHint(text) {

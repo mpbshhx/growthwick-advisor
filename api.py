@@ -166,9 +166,18 @@ def extract_text_from_file(filename: str, content: bytes) -> str:
 
 
 def extract_urls(text: str) -> list:
-    """Extract http/https URLs from a string."""
-    pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
-    return re.findall(pattern, text)
+    """Extract URLs from a string. Handles https://, http://, and bare www. domains."""
+    urls = []
+    # Full URLs with scheme
+    full_pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+    urls.extend(re.findall(full_pattern, text))
+    # Bare www. domains (no scheme) — prepend https://
+    bare_pattern = r'(?<![/\w])www\.[a-zA-Z0-9][a-zA-Z0-9\-\.]+\.[a-zA-Z]{2,}(?:/[^\s<>"{}|\\^`\[\]]*)?'
+    for match in re.findall(bare_pattern, text):
+        candidate = 'https://' + match
+        if candidate not in urls:
+            urls.append(candidate)
+    return urls[:3]
 
 
 def fetch_url_content(url: str, timeout: int = 10) -> str:
