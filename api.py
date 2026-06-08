@@ -7,6 +7,10 @@ Run locally: uvicorn api:app --reload --port 8000
 
 import os
 import io
+import re
+import urllib.request
+import urllib.error
+import html
 import numpy as np
 from pathlib import Path
 from typing import List, Optional
@@ -161,6 +165,46 @@ def extract_text_from_file(filename: str, content: bytes) -> str:
         raise HTTPException(status_code=422, detail=f"Unsupported file type: {ext}. Supported: PDF, DOCX, TXT, MD, PNG, JPG.")
 
 
+def extract_urls(text: str) -> list:
+    """Extract http/https URLs from a string."""
+    pattern = r'https?://[^\s<>"{}|\\^`\[\]]+'
+    return re.findall(pattern, text)
+
+
+def fetch_url_content(url: str, timeout: int = 10) -> str:
+    """Fetch a URL and return cleaned text content (strips HTML tags)."""
+    try:
+        req = urllib.request.Request(
+            url,
+            headers={
+                "User-Agent": "Mozilla/5.0 (compatible; GrowthwickAdvisor/1.0)",
+                "Accept": "text/html,application/xhtml+xml,*/*"
+            }
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read()
+            encoding = resp.headers.get_content_charset() or "utf-8"
+            body = raw.decode(encoding, errors="replace")
+
+        # Strip script/style blocks
+        body = re.sub(r'<script[^>]*>.*?</script>', '', body, flags=re.DOTALL | re.IGNORECASE)
+        body = re.sub(r'<style[^>]*>.*?</style>', '', body, flags=re.DOTALL | re.IGNORECASE)
+        body = re.sub(r'<nav[^>]*>.*?</nav>', '', body, flags=re.DOTALL | re.IGNORECASE)
+        body = re.sub(r'<footer[^>]*>.*?</footer>', '', body, flags=re.DOTALL | re.IGNORECASE)
+        body = re.sub(r'<header[^>]*>.*?</header>', '', body, flags=re.DOTALL | re.IGNORECASE)
+        # Strip remaining HTML tags
+        body = re.sub(r'<[^>]+>', ' ', body)
+        # Decode HTML entities
+        body = html.unescape(body)
+        # Collapse whitespace
+        body = re.sub(r'\s+', ' ', body).strip()
+        return body[:40000]  # cap at 40k chars
+    except urllib.error.HTTPError as e:
+        return f"[Could not fetch URL: HTTP {e.code} {e.reason}]"
+    except Exception as e:
+        return f"[Could not fetch URL: {str(e)}]"
+
+
 @app.post("/upload")
 async def upload_file(request: Request, file: UploadFile = File(...), query: str = Form(default=""), mode: str = Form(default="strategy-build")):
     """Upload a file + optional question. Returns LLM analysis grounded in the file content."""
@@ -294,9 +338,24 @@ async def query(request: QueryRequest, http_request: Request):
         persona_filter=request.persona_filter
     ) or []
 
+    # Detect URLs in the query — fetch and inject page content
+    urls = extract_urls(request.query)
+    url_context = ""
+    if urls:
+        fetched_pages = []
+        for url in urls[:3]:  # max 3 URLs
+            page_text = fetch_url_content(url)
+            fetched_pages.append(f"URL: {url}\n\nContent:\n{page_text}")
+        url_context = "\n\n---\n\n".join(fetched_pages)
+
     # Build prompt
     system_prompt = get_system_prompt()
-    user_message = build_user_message(request.query, request.mode, chunks)
+    if url_context:
+        # Inject URL content into the user message
+        query_with_context = f"{request.query}\n\n---\nHere is the content from the URL(s) mentioned above. Analyze this as part of your response:\n\n{url_context}"
+        user_message = build_user_message(query_with_context, request.mode, chunks)
+    else:
+        user_message = build_user_message(request.query, request.mode, chunks)
 
     # Call LLM — Azure OpenAI preferred (always available), then Anthropic, then OpenAI
     response_text = ""

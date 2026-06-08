@@ -53,8 +53,9 @@
         <span id="fileName"></span>
         <button class="file-chip-remove" onclick="clearFile()">&times;</button>
       </div>
-      <textarea id="queryInput" placeholder="Ask a question, or attach a file to review..." rows="1"
-        onkeydown="handleKeydown(event)" oninput="autoResize(this)"></textarea>
+      <textarea id="queryInput" placeholder="Ask a question, paste a URL, or attach a file..." rows="1"
+        onkeydown="handleKeydown(event)" oninput="autoResize(this); checkUrlHint(this.value)"></textarea>
+      <div id="urlHint" class="url-hint" style="display:none">🔗 URL detected — I'll fetch and analyze it</div>
       <button class="send-btn" id="sendBtn" onclick="sendQuery()">Send →</button>
     </div>
   </div>
@@ -92,7 +93,16 @@ function clearFile() {
   attachedFile = null;
   document.getElementById('fileInput').value = '';
   document.getElementById('fileChip').style.display = 'none';
-  document.getElementById('queryInput').placeholder = 'Ask a question, or attach a file to review...';
+  document.getElementById('queryInput').placeholder = 'Ask a question, paste a URL, or attach a file...';
+}
+
+function detectUrlInInput(text) {
+  return /https?:\/\/[^\s]+/.test(text);
+}
+
+function checkUrlHint(text) {
+  const hint = document.getElementById('urlHint');
+  hint.style.display = detectUrlInInput(text) ? 'block' : 'none';
 }
 
 // Load personas on startup
@@ -234,6 +244,7 @@ async function sendQuery() {
 
   input.value = '';
   input.style.height = 'auto';
+  document.getElementById('urlHint').style.display = 'none';
   addMessage('user', userLabel);
   addLoadingIndicator();
 

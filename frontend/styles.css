@@ -243,6 +243,7 @@ body {
   display: flex;
   gap: 12px;
   align-items: flex-end;
+  position: relative;
 }
 
 .input-area textarea {
@@ -334,6 +335,21 @@ body {
 }
 
 .file-chip-remove:hover { color: #c0392b; }
+
+.url-hint {
+  position: absolute;
+  bottom: 100%;
+  left: 24px;
+  background: #f0f7ff;
+  border: 1px solid #b3d9f7;
+  border-radius: 6px;
+  padding: 5px 10px;
+  font-size: 12px;
+  color: #1a6fa8;
+  margin-bottom: 4px;
+  white-space: nowrap;
+  animation: fadeIn 0.2s ease;
+}
 
 /* Sources Panel */
 .sources-panel {
