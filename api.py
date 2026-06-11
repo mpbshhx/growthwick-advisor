@@ -24,6 +24,7 @@ from auth import authenticate, get_current_user, require_auth, logout
 from models import QueryRequest, QueryResponse, ChunkSource, HealthResponse, PersonaInfo
 from retrieve import get_retriever
 from prompts import get_system_prompt, build_user_message
+import chats_db
 
 # OpenAI key (may be @vault ref in subprocess — check Azure fallback)
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY", "")
@@ -67,10 +68,11 @@ if frontend_path.exists():
 
 @app.on_event("startup")
 async def startup_event():
-    """Initialize retriever on startup."""
+    """Initialize retriever + chat history DB on startup."""
     retriever = get_retriever()
     stats = retriever.get_stats()
-    print(f"Growthwick API started. Corpus: {stats['total_chunks']} chunks, {stats['personas']} personas")
+    chats_db.init_db()
+    print(f"Growthwick API started. Corpus: {stats['total_chunks']} chunks, {stats['personas']} personas. Chats DB: {chats_db.DB_PATH}")
 
 
 @app.get("/login")
@@ -279,12 +281,30 @@ Please review this document through your marketing advisor lens. Provide specifi
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"LLM analysis failed: {str(e)}")
 
+    # Persist to chat history (best-effort; failure does not break the response)
+    conversation_id = None
+    try:
+        form = await request.form()
+        conv_in = form.get("conversation_id")
+        conversation_id = _persist_turn(
+            username=user,
+            conversation_id=str(conv_in) if conv_in else None,
+            user_content=f"\U0001F4CE {file.filename}" + (f"\n\n{user_question}" if query.strip() else " \u2014 full review"),
+            assistant_content=response_text or "",
+            mode=mode,
+            sources=None,
+            file_meta={"filename": file.filename, "size": len(content), "ext": ext},
+        )
+    except Exception as e:
+        print(f"chat persistence (upload) failed: {e}")
+
     return {
         "response": response_text,
         "filename": file.filename,
         "file_size": len(content),
         "mode": mode,
-        "query": user_question
+        "query": user_question,
+        "conversation_id": conversation_id,
     }
 
 
@@ -298,7 +318,8 @@ async def personas():
 @app.post("/query", response_model=QueryResponse)
 async def query(request: QueryRequest, http_request: Request):
     """Main query endpoint — requires auth."""
-    if not get_current_user(http_request):
+    user = get_current_user(http_request)
+    if not user:
         raise HTTPException(status_code=401, detail="Not authenticated")
     """Main query endpoint. Runs hybrid retrieval + LLM generation."""
     if not request.query.strip():
@@ -426,9 +447,121 @@ async def query(request: QueryRequest, http_request: Request):
             text=chunk.get("chunk_text", "")[:500]  # truncate for response size
         ))
 
+    # Persist to chat history (best-effort)
+    conversation_id = None
+    try:
+        conversation_id = _persist_turn(
+            username=user,
+            conversation_id=request.conversation_id,
+            user_content=request.query,
+            assistant_content=response_text or "",
+            mode=request.mode,
+            sources=[s.model_dump() for s in sources],
+            file_meta=None,
+        )
+    except Exception as e:
+        print(f"chat persistence (query) failed: {e}")
+
     return QueryResponse(
         response=response_text,
         sources=sources,
         mode=request.mode,
-        query=request.query
+        query=request.query,
+        conversation_id=conversation_id,
     )
+
+
+# ----- chat history helpers + endpoints -----
+
+def _persist_turn(username: str,
+                  conversation_id: Optional[str],
+                  user_content: str,
+                  assistant_content: str,
+                  mode: Optional[str],
+                  sources: Optional[list],
+                  file_meta: Optional[dict]) -> str:
+    """Persist a user+assistant pair. Creates the conversation if needed.
+    Returns the conversation_id used."""
+    is_new = False
+    if conversation_id:
+        existing = chats_db.get_conversation(username, conversation_id)
+        if not existing:
+            conversation_id = chats_db.create_conversation(username)["id"]
+            is_new = True
+    else:
+        conversation_id = chats_db.create_conversation(username)["id"]
+        is_new = True
+
+    chats_db.add_message(conversation_id, "user", user_content, mode=mode, file_meta=file_meta)
+    chats_db.add_message(conversation_id, "assistant", assistant_content, mode=mode, sources=sources)
+
+    if is_new:
+        chats_db.maybe_autotitle(username, conversation_id, user_content)
+    return conversation_id
+
+
+@app.get("/conversations")
+async def list_convs(request: Request, q: Optional[str] = None):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    if q:
+        return {"results": chats_db.search(user, q, limit=50), "query": q}
+    return {"conversations": chats_db.list_conversations(user)}
+
+
+@app.post("/conversations")
+async def create_conv(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    title = (body or {}).get("title") or "New chat"
+    return chats_db.create_conversation(user, title=str(title)[:80])
+
+
+@app.get("/conversations/{conv_id}")
+async def get_conv(conv_id: str, request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    conv = chats_db.get_conversation(user, conv_id)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conv
+
+
+@app.patch("/conversations/{conv_id}")
+async def patch_conv(conv_id: str, request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+    title = body.get("title")
+    pinned = body.get("pinned")
+    if title is not None:
+        title = str(title)[:120]
+    if pinned is not None:
+        pinned = bool(pinned)
+    conv = chats_db.update_conversation(user, conv_id, title=title, pinned=pinned)
+    if not conv:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return conv
+
+
+@app.delete("/conversations/{conv_id}")
+async def del_conv(conv_id: str, request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    ok = chats_db.delete_conversation(user, conv_id)
+    if not ok:
+        raise HTTPException(status_code=404, detail="Conversation not found")
+    return {"ok": True}
+

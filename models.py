@@ -6,6 +6,7 @@ class QueryRequest(BaseModel):
     query: str
     mode: str = "strategy-build"  # "stress-test" | "strategy-build"
     persona_filter: Optional[str] = None
+    conversation_id: Optional[str] = None
 
 
 class ChunkSource(BaseModel):
@@ -22,6 +23,7 @@ class QueryResponse(BaseModel):
     sources: List[ChunkSource]
     mode: str
     query: str
+    conversation_id: Optional[str] = None
 
 
 class HealthResponse(BaseModel):
